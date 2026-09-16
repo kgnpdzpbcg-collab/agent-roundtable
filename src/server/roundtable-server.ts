@@ -13,6 +13,9 @@ import type {
 /**
  * Step 5 只维护一个本地 Roundtable room。
  * 先把真实 Router 暴露为 HTTP/SSE，避免在 UI 阶段引入数据库和复杂多房间状态管理。
+ *
+ * 服务默认只监听 127.0.0.1，并故意不开放通配 CORS；Vite 开发服务器通过 /api
+ * 反向代理访问这里，避免任意网页直接调用本机 Coding Agent。
  */
 export function createRoundtableServer() {
   let router: RoundtableRouter | undefined;
@@ -20,12 +23,6 @@ export function createRoundtableServer() {
   const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
-
-      if (req.method === "OPTIONS") {
-        applyCors(res);
-        res.writeHead(204).end();
-        return;
-      }
 
       if (req.method === "GET" && url.pathname === "/api/health") {
         sendJson(res, 200, { ok: true });
@@ -148,13 +145,11 @@ async function readJson<T>(req: IncomingMessage): Promise<T> {
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  applyCors(res);
   res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(body));
 }
 
 function startSse(res: ServerResponse): void {
-  applyCors(res);
   res.writeHead(200, {
     "content-type": "text/event-stream; charset=utf-8",
     "cache-control": "no-cache, no-transform",
@@ -181,10 +176,4 @@ function serializeRoutedEvent(value: RoutedAgentEvent): unknown {
       },
     },
   };
-}
-
-function applyCors(res: ServerResponse): void {
-  res.setHeader("access-control-allow-origin", "*");
-  res.setHeader("access-control-allow-methods", "GET,POST,OPTIONS");
-  res.setHeader("access-control-allow-headers", "content-type");
 }
