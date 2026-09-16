@@ -17,7 +17,7 @@ import type {
 export function createRoundtableServer() {
   let router: RoundtableRouter | undefined;
 
-  return createServer(async (req, res) => {
+  const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
 
@@ -116,6 +116,15 @@ export function createRoundtableServer() {
       }
     }
   });
+
+  // HTTP server 被关闭时一并释放两个 Harness，避免残留本地子进程。
+  server.once("close", () => {
+    const current = router;
+    router = undefined;
+    if (current) void current.dispose();
+  });
+
+  return server;
 }
 
 function requireRouter(router: RoundtableRouter | undefined): RoundtableRouter {
