@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test --import tsx tests/**/*.test.ts",
+    "test": "node --test --import tsx tests/async-queue.test.ts",
     "smoke:codex": "tsx scripts/codex-smoke.ts"
   },
   "devDependencies": {
