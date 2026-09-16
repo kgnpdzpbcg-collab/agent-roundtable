@@ -7,17 +7,35 @@ import type {
 } from "../core/agent-types.js";
 import { CodexAdapter } from "../adapters/codex/codex-adapter.js";
 import { ClaudeCodeAdapter } from "../adapters/claude-code/claude-code-adapter.js";
+import { buildPeerReviewPrompt } from "./peer-message.js";
 import type {
   AgentId,
+  DiscussionMode,
   RouteTarget,
   RoutedAgentEvent,
   RoundtableAgentAdapter,
   RoundtableRoomState,
   RoundtableRouterOptions,
   RoundtableSendInput,
+  RoundtableStage,
 } from "./types.js";
 
 const ALL_AGENTS: AgentId[] = ["codex", "claude-deepseek"];
+const ROUTE_PREFIX = /^\s*@(Codex|DeepSeek|Both)(?=\s|$|[:：,，])[\s:：,，]*/i;
+
+type CollectedResponse = {
+  text: string;
+  failed: boolean;
+  completed: boolean;
+};
+
+type StreamSource = {
+  agent: AgentId;
+  stream: AsyncIterable<AgentEvent>;
+  stage: RoundtableStage;
+  peerAgent?: AgentId;
+  onEvent?: (event: AgentEvent) => void;
+};
 
 /**
  * Codex 早期 Adapter 的审批响应方法叫 respondToServerRequest。
@@ -30,8 +48,8 @@ class CodexRouterAdapter extends CodexAdapter implements RoundtableAgentAdapter 
 }
 
 /**
- * RoundtableRouter 只负责会话和路由，不处理模型推理，也不重新实现任何工具调用。
- * 两个 Harness 始终各自维护自己的原生 session/context。
+ * Router 只做 session / routing / discussion orchestration。
+ * 原始回答、Review 和 Cross Review 都仍由两个真实 Harness 自己完成。
  */
 export class RoundtableRouter {
   private readonly adapters: Record<AgentId, RoundtableAgentAdapter>;
@@ -50,18 +68,11 @@ export class RoundtableRouter {
     };
   }
 
-  /**
-   * 打开一个 Roundtable room。这里不急着启动两个 Harness；
-   * 某个 Agent 第一次被 Invite 或收到消息时才真正初始化并创建原生 session。
-   */
   openRoom(workspace: string, activeAgent: AgentId = this.activeAgent): void {
-    if (!workspace.trim()) {
-      throw new Error("Roundtable workspace 不能为空");
-    }
+    if (!workspace.trim()) throw new Error("Roundtable workspace 不能为空");
     if (this.workspace) {
       throw new Error("RoundtableRouter 已经打开 room；请先 dispose() 再创建新 room");
     }
-
     this.workspace = workspace;
     this.activeAgent = activeAgent;
   }
@@ -100,47 +111,59 @@ export class RoundtableRouter {
   }
 
   /**
-   * 路由规则：
-   * 1. 显式 target 优先；
-   * 2. 否则识别消息开头的 @Codex / @DeepSeek / @Both；
-   * 3. 没有 @ 时发给当前 activeAgent。
-   *
-   * @Both 在 DISCUSS 模式下并行独立发送，双方首轮看不到彼此答案。
+   * discussionMode 决定 V0.1 的讨论编排：
+   * - manual：按 target / @ / activeAgent 路由；
+   * - parallel：两边独立回答；
+   * - review：Codex 原答 -> DeepSeek Review；
+   * - reverse-review：DeepSeek 原答 -> Codex Review；
+   * - cross-review：两边独立原答 -> 互相 Review。
    */
   async *send(input: RoundtableSendInput): AsyncIterable<RoutedAgentEvent> {
     this.expectWorkspace();
-    const resolved = this.resolveTarget(input);
+    const discussionMode = input.discussionMode ?? "manual";
 
-    if (!resolved.content.trim()) {
-      throw new Error("发送给 Agent 的消息内容不能为空");
+    if (discussionMode !== "manual") {
+      this.ensureDiscussionOnly(input.mode, discussionMode);
     }
+
+    const workflowContent = this.stripRoutePrefix(input.content);
+    if (!workflowContent.trim()) throw new Error("发送给 Agent 的消息内容不能为空");
+
+    if (discussionMode === "parallel") {
+      yield* this.runParallel(workflowContent);
+      return;
+    }
+    if (discussionMode === "review") {
+      yield* this.runReview(workflowContent, "codex", "claude-deepseek");
+      return;
+    }
+    if (discussionMode === "reverse-review") {
+      yield* this.runReview(workflowContent, "claude-deepseek", "codex");
+      return;
+    }
+    if (discussionMode === "cross-review") {
+      yield* this.runCrossReview(workflowContent);
+      return;
+    }
+
+    const resolved = this.resolveTarget(input);
+    if (!resolved.content.trim()) throw new Error("发送给 Agent 的消息内容不能为空");
 
     if (resolved.target === "both") {
       if (input.mode === "EXECUTE") {
         throw new Error("EXECUTE 模式不允许 @Both：同一时刻只能有一个 Agent 写入 workspace");
       }
-
-      await Promise.all(ALL_AGENTS.map((agent) => this.invite(agent)));
-      yield* this.mergeAgentStreams(
-        ALL_AGENTS.map((agent) => ({
-          agent,
-          stream: this.adapters[agent].send({
-            content: resolved.content,
-            mode: input.mode,
-          }),
-        })),
-      );
+      yield* this.runParallel(resolved.content);
       return;
     }
 
     await this.invite(resolved.target);
     this.activeAgent = resolved.target;
-
     for await (const event of this.adapters[resolved.target].send({
       content: resolved.content,
       mode: input.mode,
     })) {
-      yield { agent: resolved.target, event };
+      yield { agent: resolved.target, stage: "original", event };
     }
   }
 
@@ -149,46 +172,162 @@ export class RoundtableRouter {
     requestId: AgentRequestId,
     result: JsonObject,
   ): void {
-    if (!this.sessions[agent]) {
-      throw new Error(`Agent 尚未加入当前 room：${agent}`);
-    }
+    if (!this.sessions[agent]) throw new Error(`Agent 尚未加入当前 room：${agent}`);
     this.adapters[agent].respondToRequest(requestId, result);
   }
 
   async dispose(): Promise<void> {
     const initialized = [...this.initializedAgents];
     this.initializedAgents.clear();
-
     await Promise.allSettled(
       initialized.map((agent) => this.adapters[agent].dispose()),
     );
-
-    for (const agent of ALL_AGENTS) {
-      delete this.sessions[agent];
-    }
+    for (const agent of ALL_AGENTS) delete this.sessions[agent];
     this.workspace = undefined;
   }
 
-  private async ensureInitialized(agent: AgentId): Promise<void> {
-    if (this.initializedAgents.has(agent)) return;
-    await this.adapters[agent].initialize();
-    this.initializedAgents.add(agent);
+  private async *runParallel(content: string): AsyncIterable<RoutedAgentEvent> {
+    await Promise.all(ALL_AGENTS.map((agent) => this.invite(agent)));
+    yield* this.mergeAgentStreams(
+      ALL_AGENTS.map((agent) => ({
+        agent,
+        stage: "original" as const,
+        stream: this.adapters[agent].send({ content, mode: "DISCUSS" }),
+      })),
+    );
+  }
+
+  private async *runReview(
+    content: string,
+    originalAgent: AgentId,
+    reviewer: AgentId,
+  ): AsyncIterable<RoutedAgentEvent> {
+    await Promise.all([this.invite(originalAgent), this.invite(reviewer)]);
+
+    const original = this.createCollectedResponse();
+    for await (const event of this.adapters[originalAgent].send({
+      content,
+      mode: "DISCUSS",
+    })) {
+      this.collectResponseEvent(original, event);
+      yield { agent: originalAgent, stage: "original", event };
+    }
+
+    if (!this.isReviewable(original)) {
+      yield this.reviewSkippedEvent(reviewer, originalAgent);
+      return;
+    }
+
+    const prompt = buildPeerReviewPrompt({
+      userRequest: content,
+      peerAgent: originalAgent,
+      peerText: original.text,
+    });
+
+    for await (const event of this.adapters[reviewer].send({
+      content: prompt,
+      mode: "DISCUSS",
+    })) {
+      yield { agent: reviewer, stage: "review", peerAgent: originalAgent, event };
+    }
+  }
+
+  private async *runCrossReview(content: string): AsyncIterable<RoutedAgentEvent> {
+    await Promise.all(ALL_AGENTS.map((agent) => this.invite(agent)));
+
+    const responses: Record<AgentId, CollectedResponse> = {
+      codex: this.createCollectedResponse(),
+      "claude-deepseek": this.createCollectedResponse(),
+    };
+
+    yield* this.mergeAgentStreams(
+      ALL_AGENTS.map((agent) => ({
+        agent,
+        stage: "original" as const,
+        stream: this.adapters[agent].send({ content, mode: "DISCUSS" }),
+        onEvent: (event: AgentEvent) =>
+          this.collectResponseEvent(responses[agent], event),
+      })),
+    );
+
+    const reviewSources: StreamSource[] = [];
+    for (const reviewer of ALL_AGENTS) {
+      const peerAgent = this.otherAgent(reviewer);
+      const peerResponse = responses[peerAgent];
+
+      if (!this.isReviewable(peerResponse)) {
+        yield this.reviewSkippedEvent(reviewer, peerAgent);
+        continue;
+      }
+
+      reviewSources.push({
+        agent: reviewer,
+        stage: "review",
+        peerAgent,
+        stream: this.adapters[reviewer].send({
+          content: buildPeerReviewPrompt({
+            userRequest: content,
+            peerAgent,
+            peerText: peerResponse.text,
+          }),
+          mode: "DISCUSS",
+        }),
+      });
+    }
+
+    if (reviewSources.length > 0) {
+      yield* this.mergeAgentStreams(reviewSources);
+    }
+  }
+
+  private async *mergeAgentStreams(
+    sources: StreamSource[],
+  ): AsyncIterable<RoutedAgentEvent> {
+    const queue = new AsyncQueue<RoutedAgentEvent>();
+    let remaining = sources.length;
+    if (remaining === 0) return;
+
+    const pump = async (source: StreamSource): Promise<void> => {
+      try {
+        for await (const event of source.stream) {
+          source.onEvent?.(event);
+          queue.push({
+            agent: source.agent,
+            stage: source.stage,
+            ...(source.peerAgent ? { peerAgent: source.peerAgent } : {}),
+            event,
+          });
+        }
+      } catch (error) {
+        const event: AgentEvent = {
+          type: "error",
+          error: error instanceof Error ? error : new Error(String(error)),
+        };
+        source.onEvent?.(event);
+        queue.push({
+          agent: source.agent,
+          stage: source.stage,
+          ...(source.peerAgent ? { peerAgent: source.peerAgent } : {}),
+          event,
+        });
+      } finally {
+        remaining -= 1;
+        if (remaining === 0) queue.close();
+      }
+    };
+
+    for (const source of sources) void pump(source);
+    for await (const event of queue) yield event;
   }
 
   private resolveTarget(input: RoundtableSendInput): {
     target: RouteTarget;
     content: string;
   } {
-    if (input.target) {
-      return { target: input.target, content: input.content };
-    }
+    if (input.target) return { target: input.target, content: input.content };
 
-    const match = input.content.match(
-      /^\s*@(Codex|DeepSeek|Both)(?=\s|$|[:：,，])[\s:：,，]*/i,
-    );
-    if (!match) {
-      return { target: this.activeAgent, content: input.content };
-    }
+    const match = input.content.match(ROUTE_PREFIX);
+    if (!match) return { target: this.activeAgent, content: input.content };
 
     const token = match[1].toLowerCase();
     const target: RouteTarget =
@@ -197,54 +336,67 @@ export class RoundtableRouter {
         : token === "deepseek"
           ? "claude-deepseek"
           : "both";
+    return { target, content: input.content.slice(match[0].length) };
+  }
 
+  private stripRoutePrefix(content: string): string {
+    const match = content.match(ROUTE_PREFIX);
+    return match ? content.slice(match[0].length) : content;
+  }
+
+  private createCollectedResponse(): CollectedResponse {
+    return { text: "", failed: false, completed: false };
+  }
+
+  private collectResponseEvent(state: CollectedResponse, event: AgentEvent): void {
+    if (event.type === "text-delta") state.text += event.delta;
+    if (event.type === "error") state.failed = true;
+    if (event.type === "completed") state.completed = true;
+  }
+
+  private isReviewable(state: CollectedResponse): boolean {
+    return state.completed && !state.failed && Boolean(state.text.trim());
+  }
+
+  private reviewSkippedEvent(
+    reviewer: AgentId,
+    peerAgent: AgentId,
+  ): RoutedAgentEvent {
     return {
-      target,
-      content: input.content.slice(match[0].length),
+      agent: reviewer,
+      stage: "review",
+      peerAgent,
+      event: {
+        type: "warning",
+        message: `跳过 Review：${peerAgent} 没有产生可审阅的完整文本回答`,
+        data: { peerAgent },
+      },
     };
   }
 
-  private async *mergeAgentStreams(
-    sources: Array<{ agent: AgentId; stream: AsyncIterable<AgentEvent> }>,
-  ): AsyncIterable<RoutedAgentEvent> {
-    const queue = new AsyncQueue<RoutedAgentEvent>();
-    let remaining = sources.length;
+  private otherAgent(agent: AgentId): AgentId {
+    return agent === "codex" ? "claude-deepseek" : "codex";
+  }
 
-    const pump = async (
-      agent: AgentId,
-      stream: AsyncIterable<AgentEvent>,
-    ): Promise<void> => {
-      try {
-        for await (const event of stream) {
-          queue.push({ agent, event });
-        }
-      } catch (error) {
-        queue.push({
-          agent,
-          event: {
-            type: "error",
-            error: error instanceof Error ? error : new Error(String(error)),
-          },
-        });
-      } finally {
-        remaining -= 1;
-        if (remaining === 0) queue.close();
-      }
-    };
-
-    for (const source of sources) {
-      void pump(source.agent, source.stream);
+  private ensureDiscussionOnly(
+    mode: AgentInput["mode"],
+    discussionMode: DiscussionMode,
+  ): void {
+    if (mode !== "DISCUSS") {
+      throw new Error(
+        `${discussionMode} 只允许 DISCUSS：Review 编排阶段不得自动修改 workspace`,
+      );
     }
+  }
 
-    for await (const event of queue) {
-      yield event;
-    }
+  private async ensureInitialized(agent: AgentId): Promise<void> {
+    if (this.initializedAgents.has(agent)) return;
+    await this.adapters[agent].initialize();
+    this.initializedAgents.add(agent);
   }
 
   private expectWorkspace(): string {
-    if (!this.workspace) {
-      throw new Error("Roundtable room 尚未 openRoom(workspace)");
-    }
+    if (!this.workspace) throw new Error("Roundtable room 尚未 openRoom(workspace)");
     return this.workspace;
   }
 }
