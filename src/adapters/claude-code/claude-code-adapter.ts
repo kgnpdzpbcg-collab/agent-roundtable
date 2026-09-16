@@ -192,8 +192,8 @@ export class ClaudeCodeAdapter {
       // DISCUSS 强制只读；EXECUTE 则由 canUseTool 将未预批准操作交给 Roundtable。
       permissionMode: message.mode === "DISCUSS" ? "plan" : "default",
       allowedTools: ["Read", "Glob", "Grep"],
-      canUseTool: async (toolName, input) => {
-        return this.requestInteraction(toolName, input, events);
+      canUseTool: async (toolName, input, permission) => {
+        return this.requestInteraction(toolName, input, permission.requestId, events);
       },
     };
   }
@@ -201,9 +201,9 @@ export class ClaudeCodeAdapter {
   private requestInteraction(
     toolName: string,
     input: Record<string, unknown>,
+    requestId: string,
     events: AsyncQueue<AgentEvent>,
   ): Promise<PermissionResult> {
-    const requestId = randomUUID();
     const request: AgentRequest = {
       requestId,
       method: toolName,
