@@ -1,32 +1,23 @@
-export type JsonPrimitive = string | number | boolean | null;
-export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
-export type JsonObject = { [key: string]: JsonValue };
+import type {
+  AgentRequest,
+  AgentRequestId,
+  JsonObject,
+  JsonValue,
+} from "../../core/agent-types.js";
 
-export type AgentMode = "DISCUSS" | "EXECUTE";
+export type {
+  AgentEvent,
+  AgentInput,
+  AgentMode,
+  AgentRequest,
+  AgentRequestId,
+  JsonObject,
+  JsonPrimitive,
+  JsonValue,
+} from "../../core/agent-types.js";
 
-export interface AgentInput {
-  content: string;
-  mode: AgentMode;
-}
-
-export type RpcId = string | number;
-
-export interface ServerRequestEvent {
-  requestId: RpcId;
-  method: string;
-  params?: JsonObject;
-}
-
-export type AgentEvent =
-  | { type: "text-delta"; delta: string }
-  | { type: "item"; method: string; data: JsonObject }
-  | { type: "tool"; method: string; data: JsonObject }
-  | { type: "approval-request"; request: ServerRequestEvent }
-  | { type: "input-request"; request: ServerRequestEvent }
-  | { type: "usage"; data: JsonObject }
-  | { type: "warning"; message: string; data?: JsonObject }
-  | { type: "completed"; data: JsonObject }
-  | { type: "error"; error: Error };
+export type RpcId = AgentRequestId;
+export type ServerRequestEvent = AgentRequest;
 
 export interface CodexAdapterOptions {
   codexCommand?: string;
