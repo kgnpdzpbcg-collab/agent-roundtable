@@ -7,6 +7,13 @@ import type {
 
 export type AgentId = "codex" | "claude-deepseek";
 export type RouteTarget = AgentId | "both";
+export type DiscussionMode =
+  | "manual"
+  | "review"
+  | "reverse-review"
+  | "parallel"
+  | "cross-review";
+export type RoundtableStage = "original" | "review";
 
 export interface RoundtableAgentAdapter {
   initialize(): Promise<void>;
@@ -19,10 +26,13 @@ export interface RoundtableAgentAdapter {
 
 export interface RoundtableSendInput extends AgentInput {
   target?: RouteTarget;
+  discussionMode?: DiscussionMode;
 }
 
 export interface RoutedAgentEvent {
   agent: AgentId;
+  stage: RoundtableStage;
+  peerAgent?: AgentId;
   event: AgentEvent;
 }
 
