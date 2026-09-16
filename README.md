@@ -30,9 +30,37 @@ Codex 继续使用本机 ChatGPT / Codex 登录态与订阅额度，不要求 Op
 ## 当前进度
 
 - **V0.1 总体方案：已冻结**
-- **Step 1 — Codex Adapter：设计与代码要求已冻结**
-- Step 1 范围：TypeScript 最小工程骨架、`codex app-server` JSON-RPC、thread start/resume、turn 流式事件、DISCUSS/EXECUTE 权限、smoke test 与基础测试。
+- **Step 1 — Codex Adapter：设计、代码要求和首版实现已同步**
+- 已实现：TypeScript 最小工程、`codex app-server` stdio JSON-RPC、initialize、thread start/resume、turn 流式事件、server request、DISCUSS/EXECUTE 权限、真实 Codex smoke 脚本和 `AsyncQueue` 基础测试。
+- 当前代码已通过 TypeScript 类型检查和 `AsyncQueue` 单元测试；真实 Codex smoke 需要在已安装并登录 Codex 的本机执行。
 - Claude Code + DeepSeek Adapter、Web UI、双 Agent Roundtable 编排尚未进入实现阶段。
+
+## Step 1 代码结构
+
+```text
+src/
+├─ index.ts
+├─ core/
+│  └─ async-queue.ts
+└─ adapters/
+   └─ codex/
+      ├─ index.ts
+      ├─ types.ts
+      ├─ json-rpc-client.ts
+      └─ codex-adapter.ts
+scripts/
+└─ codex-smoke.ts
+tests/
+└─ async-queue.test.ts
+```
+
+安装依赖后可运行：
+
+```bash
+npm run typecheck
+npm test
+npm run smoke:codex -- /path/to/workspace
+```
 
 ## 文档
 
