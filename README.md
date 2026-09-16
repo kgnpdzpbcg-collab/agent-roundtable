@@ -27,8 +27,14 @@ Roundtable -> Claude Code Harness -> DeepSeek
 
 Codex 继续使用本机 ChatGPT / Codex 登录态与订阅额度，不要求 OpenAI API Key；DeepSeek 则运行在 Claude Code Harness 内，由 Claude Code 继续管理 session、context、tools、MCP 和 agent loop。
 
-## 当前状态
+## 当前进度
 
-**V0.1 方案已冻结，尚未开始业务代码实现。**
+- **V0.1 总体方案：已冻结**
+- **Step 1 — Codex Adapter：设计与代码要求已冻结**
+- Step 1 范围：TypeScript 最小工程骨架、`codex app-server` JSON-RPC、thread start/resume、turn 流式事件、DISCUSS/EXECUTE 权限、smoke test 与基础测试。
+- Claude Code + DeepSeek Adapter、Web UI、双 Agent Roundtable 编排尚未进入实现阶段。
 
-完整设计见：[`docs/DESIGN_V0.1.md`](docs/DESIGN_V0.1.md)
+## 文档
+
+- [V0.1 总体设计](docs/DESIGN_V0.1.md)
+- [Step 1 — Codex Adapter 设计与代码要求](docs/STEP1_CODEX_ADAPTER.md)
