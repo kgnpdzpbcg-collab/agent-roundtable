@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test --import tsx tests/async-queue.test.ts",
+    "test": "node --test --import tsx tests/async-queue.test.ts tests/roundtable-router.test.ts",
     "smoke:codex": "tsx scripts/codex-smoke.ts",
     "smoke:claude": "tsx scripts/claude-code-smoke.ts"
   },
