@@ -93,6 +93,7 @@ export class ClaudeCodeAdapter {
       })
       .finally(() => {
         finished = true;
+        this.denyPendingInteractions("Claude Code turn 已结束");
         events.close();
         this.activeTurn = false;
         if (this.activeAbortController === abortController) {
@@ -132,17 +133,7 @@ export class ClaudeCodeAdapter {
   async dispose(): Promise<void> {
     this.activeAbortController?.abort();
     this.activeAbortController = undefined;
-
-    // Adapter 被关闭时明确拒绝所有仍在等待的审批，防止 query 永久挂起。
-    for (const pending of this.pendingInteractions.values()) {
-      pending.resolve({
-        behavior: "deny",
-        message: "Agent Roundtable 已关闭当前 Claude Code 会话",
-        interrupt: true,
-      });
-    }
-    this.pendingInteractions.clear();
-
+    this.denyPendingInteractions("Agent Roundtable 已关闭当前 Claude Code 会话");
     this.activeTurn = false;
     this.initialized = false;
   }
@@ -219,14 +210,16 @@ export class ClaudeCodeAdapter {
       params: this.toJsonObject(input),
     };
 
+    const result = new Promise<PermissionResult>((resolve) => {
+      this.pendingInteractions.set(requestId, { resolve });
+    });
+
     events.push({
       type: toolName === "AskUserQuestion" ? "input-request" : "approval-request",
       request,
     });
 
-    return new Promise<PermissionResult>((resolve) => {
-      this.pendingInteractions.set(requestId, { resolve });
-    });
+    return result;
   }
 
   /**
@@ -413,9 +406,23 @@ export class ClaudeCodeAdapter {
     throw new Error('Claude Code 请求响应必须包含 behavior: "allow" 或 "deny"');
   }
 
+  private denyPendingInteractions(message: string): void {
+    for (const pending of this.pendingInteractions.values()) {
+      pending.resolve({
+        behavior: "deny",
+        message,
+        interrupt: true,
+      });
+    }
+    this.pendingInteractions.clear();
+  }
+
   private toJsonObject(value: unknown): JsonObject {
     try {
       const serialized = JSON.stringify(value ?? {});
+      if (serialized === undefined) {
+        return { value: String(value) };
+      }
       const parsed: unknown = JSON.parse(serialized);
       if (this.isRecord(parsed)) return parsed as JsonObject;
       return { value: parsed as JsonValue };
