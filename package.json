@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && vite build --config vite.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.web.json --noEmit",
-    "test": "node --test --import tsx tests/async-queue.test.ts tests/roundtable-router.test.ts",
+    "test": "node --test --import tsx tests/async-queue.test.ts tests/roundtable-router.test.ts tests/server.test.ts",
     "dev:server": "tsx watch scripts/server.ts",
     "dev:web": "vite --config vite.config.ts",
     "serve": "tsx scripts/server.ts",
