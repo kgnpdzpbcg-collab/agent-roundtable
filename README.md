@@ -25,31 +25,41 @@ Roundtable -> Codex app-server -> GPT
 Roundtable -> Claude Code Harness -> DeepSeek
 ```
 
-Codex 继续使用本机 ChatGPT / Codex 登录态与订阅额度，不要求 OpenAI API Key；DeepSeek 则运行在 Claude Code Harness 内，由 Claude Code 继续管理 session、context、tools、MCP 和 agent loop。
+Codex 继续使用本机 ChatGPT / Codex 登录态与订阅额度，不要求 OpenAI API Key；DeepSeek 运行在 Claude Code Harness 内，由 Claude Code 继续管理 session、context、tools、MCP 和 agent loop。
 
 ## 当前进度
 
 - **V0.1 总体方案：已冻结**
-- **Step 1 — Codex Adapter：设计、代码要求和首版实现已同步**
-- 已实现：TypeScript 最小工程、`codex app-server` stdio JSON-RPC、initialize、thread start/resume、turn 流式事件、server request、DISCUSS/EXECUTE 权限、真实 Codex smoke 脚本和 `AsyncQueue` 基础测试。
-- 当前代码已通过 TypeScript 类型检查和 `AsyncQueue` 单元测试；真实 Codex smoke 需要在已安装并登录 Codex 的本机执行。
-- Claude Code + DeepSeek Adapter、Web UI、双 Agent Roundtable 编排尚未进入实现阶段。
+- **Step 1 — Codex Adapter：首版实现已同步**
+- **Step 2 — Claude Code + DeepSeek Adapter：首版实现已同步**
+- 两个 Adapter 已统一使用 `AgentInput / AgentEvent / AgentRequest` 核心协议。
+- Claude Code Adapter 使用官方 `@anthropic-ai/claude-agent-sdk`，显式加载 `user / project / local` settings，不覆盖现有 model/provider，因此继续复用用户已有 Claude Code + DeepSeek 配置。
+- Step 1 已做 TypeScript 类型检查和 `AsyncQueue` 单元测试；Codex 与 Claude Code 的真实 smoke 都需要在对应的本机登录 / provider 环境执行。
+- 下一阶段：**统一 Roundtable Router / 双 Agent 路由**，之后再进入 Web UI 和 Review / Parallel / Cross Review 编排。
 
-## Step 1 代码结构
+## 当前代码结构
 
 ```text
 src/
 ├─ index.ts
 ├─ core/
+│  ├─ agent-types.ts
 │  └─ async-queue.ts
 └─ adapters/
-   └─ codex/
+   ├─ codex/
+   │  ├─ index.ts
+   │  ├─ types.ts
+   │  ├─ json-rpc-client.ts
+   │  └─ codex-adapter.ts
+   └─ claude-code/
       ├─ index.ts
       ├─ types.ts
-      ├─ json-rpc-client.ts
-      └─ codex-adapter.ts
+      └─ claude-code-adapter.ts
+
 scripts/
-└─ codex-smoke.ts
+├─ codex-smoke.ts
+└─ claude-code-smoke.ts
+
 tests/
 └─ async-queue.test.ts
 ```
@@ -60,9 +70,13 @@ tests/
 npm run typecheck
 npm test
 npm run smoke:codex -- /path/to/workspace
+npm run smoke:claude -- /path/to/workspace
 ```
+
+Claude Code smoke 会输出 `system/init` 中的实际 model，可用来确认 Roundtable 是否继承了预期的 DeepSeek 配置。
 
 ## 文档
 
 - [V0.1 总体设计](docs/DESIGN_V0.1.md)
 - [Step 1 — Codex Adapter 设计与代码要求](docs/STEP1_CODEX_ADAPTER.md)
+- [Step 2 — Claude Code + DeepSeek Adapter](docs/STEP2_CLAUDE_CODE_ADAPTER.md)
