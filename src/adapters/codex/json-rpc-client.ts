@@ -206,8 +206,17 @@ export class JsonRpcClient {
   private shutdown(error: Error): void {
     if (this.closed) return;
     this.closed = true;
+
+    const child = this.process;
+    this.process = undefined;
     this.rejectPending(error);
     for (const listener of this.closeListeners) listener(error);
+
+    // 协议已经不可继续时主动终止子进程，避免留下失联的 app-server。
+    if (child && child.exitCode === null) {
+      child.stdin.destroy();
+      child.kill("SIGTERM");
+    }
   }
 
   private rejectPending(error: Error): void {
